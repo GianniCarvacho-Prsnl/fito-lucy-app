@@ -1,6 +1,6 @@
 from supabase import create_client, Client
 from app.core.config import settings
-import httpx
+# import httpx # No es necesario importar httpx aquí si no lo usamos explícitamente
 import logging
 
 logger = logging.getLogger(__name__)
@@ -8,33 +8,35 @@ logger = logging.getLogger(__name__)
 def get_supabase_client() -> Client:
     """Crea y retorna una instancia del cliente Supabase."""
     try:
-        # Configuración de timeout para httpx (requerido por supabase-py 1.x)
-        # Aumentamos un poco los timeouts por si hay latencia
-        timeout = httpx.Timeout(10.0, connect=5.0, read=15.0, write=10.0)
-        
-        # Inicializa el cliente Supabase
-        # Para v1.0.3, los parámetros extra van en un dict `options`
+        # Usamos la inicialización más simple, que funcionó en la prueba
         supabase_client: Client = create_client(
             settings.SUPABASE_URL,
-            settings.SUPABASE_KEY,
-            options={
-                "persist_session": True, # Intenta mantener la sesión (útil si usáramos auth del backend)
-                "auto_refresh_token": True, # Intenta refrescar token (útil si usáramos auth del backend)
-                "timeout": 10, # Timeout general en segundos (afecta a postgrest-py)
-                "httpx_client": httpx.Client(timeout=timeout) # Pasamos el cliente httpx configurado
-            }
+            settings.SUPABASE_KEY
         )
-        logger.info("Cliente Supabase inicializado exitosamente.")
+        logger.info("Cliente Supabase inicializado exitosamente (simple).")
         return supabase_client
     except Exception as e:
         logger.error(f"Error al inicializar el cliente Supabase: {e}")
-        # Podríamos decidir si relanzar la excepción o manejarla de otra forma
-        raise ConnectionError(f"No se pudo conectar a Supabase: {e}") from e
+        import traceback
+        traceback.print_exc() # Imprimir stacktrace para depuración
+        raise ConnectionError(f"No se pudo inicializar el cliente Supabase: {e}") from e
 
 # Crear una instancia global del cliente para ser usada en la aplicación
-# Esto sigue el patrón de "singleton" para evitar crear múltiples conexiones
-supabase_client_instance: Client = get_supabase_client()
+try:
+    supabase_client_instance: Client = get_supabase_client()
+except ConnectionError as e:
+    logger.critical(f"FALLO CRÍTICO: No se pudo crear la instancia del cliente Supabase al inicio: {e}")
+    # En un caso real, podríamos querer que la aplicación no inicie si no puede conectarse
+    # sys.exit(1) 
+    supabase_client_instance = None # O manejarlo de otra forma
 
 # Función para obtener la instancia (útil para dependencias en FastAPI)
 def get_db() -> Client:
+    if supabase_client_instance is None:
+        # Si falló la inicialización al inicio, lanzamos un error aquí
+        # para que las peticiones fallen apropiadamente.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+            detail="Servicio de base de datos no disponible. Contacte al administrador."
+        )
     return supabase_client_instance 

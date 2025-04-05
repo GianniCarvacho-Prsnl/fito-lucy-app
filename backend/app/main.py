@@ -1,10 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-# Importaremos los routers más adelante
-# from app.routers import pets
+# Importamos el router de mascotas
+from app.routers import pets
+# Importamos la configuración para usar el prefijo API
+from app.core.config import settings
 
 app = FastAPI(
-    title="PawTracker API",
+    title=settings.PROJECT_NAME,
     description="API para la gestión de mascotas y más",
     version="0.1.0"
 )
@@ -25,13 +27,13 @@ app.add_middleware(
     allow_headers=["*"],      # Permite todas las cabeceras
 )
 
-# Incluir routers (lo haremos más adelante)
-# app.include_router(pets.router, prefix="/api")
+# Incluir el router de mascotas con su prefijo
+app.include_router(pets.router, prefix=settings.API_V1_STR + "/pets")
 
 # Endpoint raíz de prueba
 @app.get("/")
 async def root():
-    return {"message": "Bienvenido a la API de PawTracker V2"}
+    return {"message": f"Bienvenido a {settings.PROJECT_NAME}"}
 
 # Endpoint de salud para verificar que la API está corriendo
 @app.get("/health")

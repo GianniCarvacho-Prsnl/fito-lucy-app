@@ -132,7 +132,7 @@ export default function PetDetail() {
                   <h3 className="text-sm font-medium text-gray-500">Fecha de Nacimiento</h3>
                   <p className="mt-1 text-gray-900">
                     {pet.birthdate 
-                      ? new Date(pet.birthdate).toLocaleDateString() 
+                      ? new Date(pet.birthdate.replace(/-/g, '/')).toLocaleDateString() 
                       : 'No especificado'}
                   </p>
                 </div>

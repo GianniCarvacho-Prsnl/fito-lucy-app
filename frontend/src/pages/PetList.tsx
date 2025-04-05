@@ -16,11 +16,11 @@ export default function PetList() {
     const fetchPets = async () => {
       try {
         setLoading(true);
-        const petsData = await petService.getPets(user.id);
+        const petsData = await petService.getPets();
         setPets(petsData);
       } catch (err) {
         console.error('Error fetching pets:', err);
-        setError('Error al cargar la lista de mascotas. Por favor, intenta nuevamente.');
+        setError(err instanceof Error ? err.message : 'Error al cargar la lista de mascotas.');
       } finally {
         setLoading(false);
       }
