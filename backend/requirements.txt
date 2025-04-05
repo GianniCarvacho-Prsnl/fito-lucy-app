@@ -1,0 +1,18 @@
+# Core FastAPI
+fastapi==0.110.0
+uvicorn[standard]==0.27.1 # Incluye dependencias estándar como watchfiles para reload
+
+# Configuración y variables de entorno
+python-dotenv==1.0.1
+pydantic-settings==2.2.1
+
+# Supabase (versión estable v1.x)
+supabase==1.0.3
+httpx==0.23.3 # Versión compatible con supabase==1.0.3
+
+# Seguridad (para manejo de JWT)
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Para formularios (ej. subida de archivos)
+python-multipart==0.0.7 
