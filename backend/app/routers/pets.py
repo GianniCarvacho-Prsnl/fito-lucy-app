@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Response
-from typing import List, Optional # Aseguramos Optional para PetUpdate
+from fastapi import APIRouter, Depends, HTTPException, status, Response, File, UploadFile
+from typing import List, Optional, Dict # Aseguramos Optional para PetUpdate
 from supabase import Client # Para type hinting
 import uuid # Para validar el owner_id
 from datetime import date # Necesario para la conversión de fecha en update
@@ -8,6 +8,9 @@ from app.models.pet import Pet, PetCreate, PetUpdate # Añadimos PetUpdate
 from app.services.supabase_client import get_db # Importamos el proveedor del cliente Supabase
 # Importamos la dependencia de autenticación real
 from app.core.auth import get_current_user 
+# Importar el nuevo servicio y las excepciones personalizadas
+from app.services import pet_service
+from app.services.pet_service import PetNotFoundError, PetAccessForbiddenError, PetDatabaseError, StorageUploadError
 
 # Ya no necesitamos el placeholder
 # async def get_current_user_placeholder():
@@ -16,8 +19,54 @@ from app.core.auth import get_current_user
 router = APIRouter(
     # El prefijo se definirá al incluir el router en main.py
     tags=["Pets"], # Etiqueta para agrupar endpoints en la documentación
-    responses={404: {"description": "Not Found"}} # Respuesta común
+    responses={
+        404: {"description": "Not Found"},
+        403: {"description": "Access Forbidden"},
+        400: {"description": "Bad Request"}, # Para errores de subida
+        500: {"description": "Internal Server Error"}
+    }
 )
+
+# --- FUNCIÓN AUXILIAR PARA VERIFICAR PROPIEDAD --- 
+async def _get_pet_and_verify_owner(pet_id: uuid.UUID, user_id: str, db: Client) -> dict:
+    """
+    Obtiene una mascota por ID y verifica que pertenezca al user_id proporcionado.
+    Lanza HTTPException 404 si no se encuentra o 403 si no pertenece al usuario.
+    Devuelve los datos de la mascota si la verificación es exitosa.
+    """
+    print(f"_get_pet_and_verify_owner: Verificando mascota ID: {pet_id} para user_id: {user_id}")
+    try:
+        # Seleccionamos todos los datos, no solo owner_id, para devolverlos si éxito
+        response = db.table("pets").select("*").eq("id", str(pet_id)).maybe_single().execute()
+        
+        # print("Respuesta cruda (verificación owner):", response)
+
+        if hasattr(response, 'error') and response.error:
+             print(f"Error Supabase (verificación owner): {response.error}")
+             # Usar 500 aquí, ya que es un error inesperado de la BD al verificar
+             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error de BD al verificar mascota")
+
+        if not response.data:
+            print(f"Mascota {pet_id} no encontrada.")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Mascota con ID {pet_id} no encontrada")
+        
+        pet_data = response.data
+        if str(pet_data.get("owner_id")) != str(user_id):
+            print(f"Conflicto propietario: Mascota {pet_id} pertenece a {pet_data.get('owner_id')}, no a {user_id}")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para acceder/modificar esta mascota")
+        
+        print(f"Verificación de propiedad OK para mascota {pet_id}")
+        return pet_data # Devuelve los datos completos de la mascota encontrada
+
+    except HTTPException as http_exc:
+        # Re-lanzar las excepciones HTTP que generamos nosotros mismos
+        raise http_exc
+    except Exception as e:
+        # Capturar otros errores inesperados durante la verificación
+        print(f"Error inesperado en _get_pet_and_verify_owner: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno al verificar la mascota")
 
 @router.get("/", response_model=List[Pet])
 async def read_pets(
@@ -37,42 +86,15 @@ async def read_pets(
     print(f"Endpoint read_pets: Obteniendo mascotas para user_id: {user_id}")
     
     try:
-        # Usamos la service_role key, así que RLS se omite, pero filtramos explícitamente
-        response = db.table("pets").select("*", count='exact').eq("owner_id", str(user_id)).execute()
-        
-        # Debug: Imprimir la respuesta cruda de Supabase
-        print("Respuesta cruda de Supabase:", response)
-        
-        if hasattr(response, 'error') and response.error:
-            print(f"Error de Supabase al obtener mascotas: {response.error}")
-            # Considerar si el error es específico (ej. 4xx) o genérico (500)
-            # Por ahora, lo tratamos como error interno del servidor
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                                detail=f"Error de base de datos al consultar mascotas")
-        
-        if hasattr(response, 'data'):
-             # Pydantic validará automáticamente que los datos coincidan con List[Pet]
-             print(f"Mascotas encontradas: {len(response.data)}")
-             return response.data
-        else:
-            # Si la respuesta no tiene 'data', algo inesperado ocurrió
-            print("Respuesta inesperada de Supabase (sin data)")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                                detail="Respuesta inesperada del servicio de base de datos")
-
-    except HTTPException as http_exc:
-        # Re-lanzar excepciones HTTP que ya hayamos generado (como 401 de get_current_user)
-        raise http_exc
-    except ConnectionError as conn_err:
-         print(f"Error de conexión a Supabase: {conn_err}")
-         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-                             detail="No se pudo conectar al servicio de base de datos")
+        pets = await pet_service.get_pets_by_owner(db=db, owner_id=str(user_id))
+        return pets
+    except PetDatabaseError as e:
+        # Captura errores de BD del servicio
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
-        print(f"Error inesperado en read_pets: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                            detail="Ocurrió un error interno al procesar la solicitud")
+        # Otros errores inesperados
+        print(f"Error inesperado en router read_pets: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno")
 
 # --- NUEVO ENDPOINT --- 
 @router.post("/", response_model=Pet, status_code=status.HTTP_201_CREATED)
@@ -117,39 +139,14 @@ async def create_pet(
     
     try:
         # Insertar en Supabase
-        response = db.table("pets").insert(pet_data_to_insert).execute()
-        
-        print("Respuesta cruda de Supabase (insert):", response)
-
-        if hasattr(response, 'error') and response.error:
-            print(f"Error de Supabase al crear mascota: {response.error}")
-            # Aquí podríamos intentar dar un error más específico si es posible
-            # ej. si es una violación de constraint, podría ser un 409 Conflict o 400 Bad Request
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 
-                                detail=f"Error de base de datos al crear mascota: {response.error.message}")
-        
-        if hasattr(response, 'data') and response.data:
-             created_pet_data = response.data[0] # Insert devuelve una lista con el elemento creado
-             print(f"Mascota creada exitosamente con ID: {created_pet_data.get('id')}")
-             # FastAPI/Pydantic validarán que coincida con el response_model Pet
-             return created_pet_data
-        else:
-            print("Respuesta inesperada de Supabase al crear mascota (sin data)")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                                detail="Error inesperado del servicio de base de datos al crear mascota")
-
-    except HTTPException as http_exc:
-        raise http_exc
-    except ConnectionError as conn_err:
-         print(f"Error de conexión a Supabase: {conn_err}")
-         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-                             detail="No se pudo conectar al servicio de base de datos")
+        created_pet = await pet_service.create_new_pet(db=db, owner_id=str(user_id), pet_data=pet_data_to_insert)
+        return created_pet
+    except PetDatabaseError as e:
+        # Puede ser un 400 Bad Request si Supabase devolvió error (ej: constraint)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        print(f"Error inesperado en create_pet: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                            detail="Ocurrió un error interno al crear la mascota")
+        print(f"Error inesperado en router create_pet: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno al crear mascota")
 
 # --- NUEVO ENDPOINT --- 
 @router.put("/{pet_id}", response_model=Pet)
@@ -170,31 +167,10 @@ async def update_pet(
     print(f"Endpoint update_pet: Actualizando mascota ID: {pet_id} para user_id: {user_id}")
     print(f"Datos de actualización recibidos: {pet_in.model_dump(exclude_unset=True)}")
 
-    # 1. Verificar que la mascota existe y pertenece al usuario
-    try:
-        existing_pet_response = db.table("pets").select("owner_id").eq("id", str(pet_id)).maybe_single().execute()
-        
-        print("Respuesta cruda de Supabase (verificación owner):", existing_pet_response)
-
-        if hasattr(existing_pet_response, 'error') and existing_pet_response.error:
-             print(f"Error de Supabase al verificar mascota: {existing_pet_response.error}")
-             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error de base de datos al verificar mascota")
-
-        if not existing_pet_response.data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Mascota con ID {pet_id} no encontrada")
-        
-        if str(existing_pet_response.data.get("owner_id")) != str(user_id):
-            print(f"Conflicto de propietario: Mascota {pet_id} pertenece a {existing_pet_response.data.get('owner_id')}, no a {user_id}")
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para modificar esta mascota")
-        
-        print(f"Verificación de propiedad OK para mascota {pet_id}")
-
-    except HTTPException as http_exc:
-        raise http_exc
-    except Exception as e:
-        print(f"Error inesperado durante la verificación de propiedad: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno al verificar la mascota")
-
+    # 1. Verificar propiedad usando la función auxiliar
+    # La función ya lanza 404 o 403 si es necesario
+    await _get_pet_and_verify_owner(pet_id=pet_id, user_id=user_id, db=db)
+    
     # 2. Preparar datos para la actualización
     # Usamos exclude_unset=True para obtener solo los campos que el cliente envió
     update_data = pet_in.model_dump(exclude_unset=True)
@@ -217,38 +193,19 @@ async def update_pet(
 
     # 3. Realizar la actualización en Supabase
     try:
-        response = db.table("pets").update(update_data).eq("id", str(pet_id)).execute()
-
-        print("Respuesta cruda de Supabase (update):", response)
-        
-        if hasattr(response, 'error') and response.error:
-            print(f"Error de Supabase al actualizar mascota: {response.error}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 
-                                detail=f"Error de base de datos al actualizar mascota: {response.error.message}")
-        
-        if hasattr(response, 'data') and response.data:
-             updated_pet_data = response.data[0]
-             print(f"Mascota {pet_id} actualizada exitosamente.")
-             return updated_pet_data
-        else:
-            # Esto podría pasar si el ID era correcto pero algo falló silenciosamente
-            print("Respuesta inesperada de Supabase al actualizar (sin data)")
-            # Podríamos re-leer la mascota para asegurar o devolver un error
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                                detail="Error inesperado del servicio de base de datos al actualizar mascota")
-
-    except HTTPException as http_exc:
-        raise http_exc
-    except ConnectionError as conn_err:
-         print(f"Error de conexión a Supabase: {conn_err}")
-         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-                             detail="No se pudo conectar al servicio de base de datos")
+        updated_pet = await pet_service.update_existing_pet(
+            db=db, pet_id=pet_id, user_id=str(user_id), update_data=update_data
+        )
+        return updated_pet
+    except PetNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PetAccessForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PetDatabaseError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        print(f"Error inesperado en update_pet: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                            detail="Ocurrió un error interno al actualizar la mascota")
+        print(f"Error inesperado en router update_pet: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno al actualizar mascota")
 
 # --- NUEVO ENDPOINT --- 
 @router.get("/{pet_id}", response_model=Pet)
@@ -267,45 +224,12 @@ async def read_pet(
 
     print(f"Endpoint read_pet: Obteniendo mascota ID: {pet_id} para user_id: {user_id}")
 
-    try:
-        # Seleccionamos todos los campos de la mascota por su ID
-        response = db.table("pets").select("*").eq("id", str(pet_id)).maybe_single().execute()
-        
-        print("Respuesta cruda de Supabase (get by id):", response)
-
-        if hasattr(response, 'error') and response.error:
-            print(f"Error de Supabase al obtener mascota por ID: {response.error}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                                detail=f"Error de base de datos al obtener mascota: {response.error.message}")
-
-        # maybe_single() devuelve None en response.data si no se encuentra
-        if not response.data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Mascota con ID {pet_id} no encontrada")
-        
-        pet_data = response.data
-
-        # Verificar propiedad
-        if str(pet_data.get("owner_id")) != str(user_id):
-            print(f"Conflicto de propietario en GET: Mascota {pet_id} pertenece a {pet_data.get('owner_id')}, no a {user_id}")
-            # Aunque RLS debería prevenir esto si la política está bien, es una doble verificación
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para ver esta mascota")
-
-        print(f"Mascota {pet_id} encontrada y verificada.")
-        # FastAPI/Pydantic validarán que pet_data coincida con el response_model Pet
-        return pet_data
-
-    except HTTPException as http_exc:
-        raise http_exc
-    except ConnectionError as conn_err:
-         print(f"Error de conexión a Supabase: {conn_err}")
-         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-                             detail="No se pudo conectar al servicio de base de datos")
-    except Exception as e:
-        print(f"Error inesperado en read_pet: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                            detail="Ocurrió un error interno al obtener la mascota")
+    # Usamos la función auxiliar para obtener y verificar
+    # Ya maneja 404 y 403
+    pet_data = await _get_pet_and_verify_owner(pet_id=pet_id, user_id=user_id, db=db)
+    
+    # Si la función anterior no lanzó excepción, pet_data es válido
+    return pet_data
 
 # --- NUEVO ENDPOINT --- 
 @router.delete("/{pet_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -324,63 +248,60 @@ async def delete_pet(
 
     print(f"Endpoint delete_pet: Eliminando mascota ID: {pet_id} para user_id: {user_id}")
 
-    # 1. Verificar que la mascota existe y pertenece al usuario (igual que en PUT y GET/{id})
-    try:
-        existing_pet_response = db.table("pets").select("owner_id").eq("id", str(pet_id)).maybe_single().execute()
-        
-        print("Respuesta cruda de Supabase (verificación owner):", existing_pet_response)
-
-        if hasattr(existing_pet_response, 'error') and existing_pet_response.error:
-             print(f"Error de Supabase al verificar mascota para eliminar: {existing_pet_response.error}")
-             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error de BD al verificar mascota")
-
-        # Si no se encuentra, ya no existe, podemos considerar la operación exitosa o devolver 404
-        # Devolver 404 es más explícito si el cliente esperaba que existiera.
-        if not existing_pet_response.data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Mascota con ID {pet_id} no encontrada para eliminar")
-        
-        # Verificar propiedad
-        if str(existing_pet_response.data.get("owner_id")) != str(user_id):
-            print(f"Conflicto de propietario al eliminar: Mascota {pet_id} no pertenece a {user_id}")
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permiso para eliminar esta mascota")
-        
-        print(f"Verificación de propiedad OK para eliminar mascota {pet_id}")
-
-    except HTTPException as http_exc:
-        raise http_exc
-    except Exception as e:
-        print(f"Error inesperado durante la verificación para eliminar: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno al verificar la mascota para eliminar")
-
+    # 1. Verificar propiedad usando la función auxiliar
+    # La función ya lanza 404 o 403 si es necesario
+    await _get_pet_and_verify_owner(pet_id=pet_id, user_id=user_id, db=db)
+    
     # 2. Realizar la eliminación en Supabase
     try:
-        response = db.table("pets").delete().eq("id", str(pet_id)).execute()
-
-        print("Respuesta cruda de Supabase (delete):", response)
-        
-        # Verificar errores específicos de la operación DELETE
-        if hasattr(response, 'error') and response.error:
-            print(f"Error de Supabase al eliminar mascota: {response.error}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, 
-                                detail=f"Error de base de datos al eliminar mascota: {response.error.message}")
-        
-        # Nota: DELETE exitoso en Supabase v1.x a menudo devuelve data=[] o data=None
-        # No necesariamente devuelve los datos eliminados.
-        # El éxito se infiere por la ausencia de error y el status code 204.
-        print(f"Mascota {pet_id} eliminada exitosamente.")
-        
-        # No devolvemos cuerpo, solo el status 204 definido en el decorador
+        await pet_service.delete_pet_by_id(db=db, pet_id=pet_id, user_id=str(user_id))
+        # Si no hay excepción, la eliminación fue exitosa (o la mascota no existía y pertenecía al usuario)
+        # Devolvemos 204
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-    except HTTPException as http_exc:
-        raise http_exc
-    except ConnectionError as conn_err:
-         print(f"Error de conexión a Supabase: {conn_err}")
-         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-                             detail="No se pudo conectar al servicio de base de datos")
+    except PetNotFoundError as e:
+        # Si queremos ser estrictos y devolver 404 si no existe al eliminar
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PetAccessForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except PetDatabaseError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        print(f"Error inesperado en delete_pet: {e}")
+        print(f"Error inesperado en router delete_pet: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno al eliminar mascota")
+
+# --- NUEVO ENDPOINT PARA SUBIDA DE FOTOS --- 
+@router.post("/upload_photo", response_model=Dict[str, str])
+async def upload_pet_photo(
+    *, 
+    db: Client = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    file: UploadFile = File(...) # Recibe el archivo como parte de form-data
+):
+    """
+    Sube una foto para una mascota al almacenamiento y devuelve la URL pública.
+    Nota: Esta versión simple solo sube la foto. No la asocia automáticamente
+    a una mascota específica en la base de datos. Se podría extender para
+    recibir un `pet_id` y actualizar el campo `photo_url` de esa mascota.
+    """
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario no identificado")
+
+    print(f"Endpoint upload_pet_photo: Recibido archivo: {file.filename}, tipo: {file.content_type}, para user: {user_id}")
+
+    try:
+        public_url = await pet_service.upload_photo_to_storage(
+            db=db, user_id=str(user_id), file=file
+        )
+        # Devuelve un diccionario simple con la URL
+        return {"photo_url": public_url}
+        
+    except StorageUploadError as e:
+        # Errores específicos de la subida (ej. tipo inválido, error de lectura, error de storage)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        # Otros errores inesperados
+        print(f"Error inesperado en router upload_pet_photo: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                            detail="Ocurrió un error interno al eliminar la mascota") 
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno al subir la foto") 
