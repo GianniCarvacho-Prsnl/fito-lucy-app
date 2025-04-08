@@ -5,6 +5,7 @@ import { Pet, petService } from '../services/petService';
 import { useAuth } from '../context/AuthContext';
 
 export default function PetForm() {
+  console.log('PetForm component rendering/re-rendering...');
   const { id } = useParams<{ id: string }>();
   const isEditing = !!id;
   const { user } = useAuth();
@@ -56,8 +57,10 @@ export default function PetForm() {
   };
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    console.log('handleFileChange function CALLED.');
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      console.log('handleFileChange: Archivo seleccionado:', file);
       setSelectedFile(file);
       
       // Crear vista previa de la imagen
@@ -70,6 +73,7 @@ export default function PetForm() {
   };
 
   const handleSubmit = async (e: FormEvent) => {
+    console.log('handleSubmit function CALLED.');
     e.preventDefault();
     setLoading(true);
     setError(null);
@@ -79,6 +83,7 @@ export default function PetForm() {
 
       // Subir foto si se seleccionó una nueva
       if (selectedFile) {
+        console.log('handleSubmit: Intentando subir archivo:', selectedFile);
         const uploadedUrl = await petService.uploadPetPhoto(selectedFile);
         if (uploadedUrl) {
           photoUrl = uploadedUrl;

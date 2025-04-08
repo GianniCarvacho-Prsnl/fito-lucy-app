@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 # Importamos el router de mascotas
 from app.routers import pets
+# Importamos también el router de perfiles
+from app.routers import profiles
 # Importamos la configuración para usar el prefijo API
 from app.core.config import settings
 
@@ -29,6 +31,8 @@ app.add_middleware(
 
 # Incluir el router de mascotas con su prefijo
 app.include_router(pets.router, prefix=settings.API_V1_STR + "/pets")
+# Incluir el router de perfiles con su prefijo
+app.include_router(profiles.router, prefix=settings.API_V1_STR + "/profiles")
 
 # Endpoint raíz de prueba
 @app.get("/")
