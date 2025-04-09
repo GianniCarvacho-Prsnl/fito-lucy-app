@@ -24,6 +24,7 @@ export default function Layout({ children }: LayoutProps) {
   const navItems = [
     { name: 'Dashboard', path: '/dashboard', icon: '🏠' },
     { name: 'Mis Mascotas', path: '/pets', icon: '🐾' },
+    { name: 'Calendario', path: '/calendar', icon: '📅' },
     { name: 'Perfil', path: '/profile', icon: '👤' },
   ];
 

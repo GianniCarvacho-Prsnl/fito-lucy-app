@@ -7,6 +7,7 @@ import PetList from './pages/PetList';
 import PetDetail from './pages/PetDetail';
 import PetForm from './pages/PetForm';
 import Profile from './pages/Profile';
+import CalendarPage from './pages/CalendarPage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -97,6 +98,14 @@ function App() {
             element={
               <PrivateRoute>
                 <Profile />
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="/calendar"
+            element={
+              <PrivateRoute>
+                <CalendarPage />
               </PrivateRoute>
             }
           />

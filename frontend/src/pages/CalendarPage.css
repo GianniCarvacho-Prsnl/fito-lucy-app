@@ -1,0 +1,96 @@
+/* Estilos para el calendario */
+.calendar-container {
+  width: 100%;
+  height: 100%;
+}
+
+.calendar-wrapper {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 16px;
+  margin-bottom: 16px;
+  height: 600px;
+}
+
+/* Personalizar eventos */
+.fc-event-custom {
+  padding: 2px 4px;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 1px;
+  margin-bottom: 1px;
+  min-height: 20px;
+  border: none !important;
+  width: calc(100% - 6px) !important;
+  margin-left: 3px;
+  margin-right: 3px;
+}
+
+/* Hacer que los eventos ocupen todo el ancho */
+.fc-daygrid-event-harness {
+  width: 100% !important;
+  left: 0 !important;
+  right: 0 !important;
+  padding: 0 2px;
+}
+
+.fc-daygrid-event {
+  width: 100% !important;
+  box-sizing: border-box;
+}
+
+.fc-h-event {
+  width: 100% !important;
+  left: 0 !important;
+  right: 0 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.fc-event-time {
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+.fc-event-title {
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+/* Cabecera del calendario */
+.fc-header-toolbar {
+  margin-bottom: 1.5em !important;
+}
+
+/* Estilos para días en el mes siguiente/anterior */
+.fc-day-other .fc-daygrid-day-top {
+  opacity: 0.6;
+}
+
+/* Asegurarse de que los eventos en días fuera del mes actual sean visibles */
+.fc-day-other .fc-daygrid-event-harness {
+  margin-top: 0;
+}
+
+/* Mejorar el contenedor de eventos para evitar superposiciones */
+.fc-daygrid-event-harness {
+  margin-top: 1px !important;
+  margin-bottom: 1px !important;
+}
+
+/* Responsive para móviles */
+@media (max-width: 768px) {
+  .calendar-wrapper {
+    padding: 8px;
+    height: 500px;
+  }
+  
+  .fc-header-toolbar {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+} 
